@@ -53,3 +53,52 @@ from emp A;
 ```
 
 > 힌트를 사용할 거라면 옵티마이저가 절대로 다른 방식을 선택하지 못하도록 빈틈없이 기술해야함.
+
+## sql 공유 및 재사용
+### 1.2.1 소프트 파싱 vs 하드 파싱
+- 라이브러리 캐시(library cache) : sql 파싱, 최적화, 로우 소스 생성 과정을 거쳐 생성한 내부 프로시저를 반복 재사용할 수 있도록 캐싱해두는 메모리 공간
+- SGA(system global area) : 서버 프로세스와 백그라운드 프로세스가 공통으로 액세스하는 데이터와 제어구조를 캐싱하는 메모리 공간
+![](sga.png)
+- `소프트 파싱` : sql을 캐시에허 찾아 곧바로 실행 단계로 넘어가는 것을 말함.
+- `하드 파싱` : 캐시에서 찾는데 실패해 최적화 및 로우 소스 생성 단계까지 모두 거치는 것
+
+#### sql 최적화 과정이 hard한 이유
+- 옵티마이저가 sql을 최적화 할 때, 많은 일을 수행
+  - 테이블 컬럼, 인덱스 구조에 관한 기본 정보
+  - 오브젝트 통계 : 테이블 통계, 인덱스 통계, 컬럼 통계
+  - 시스템 통계 : cpu 속도, 싱글 블록 io 속도, 멀티 블록 io 속도
+  - 옵티마이저 관련 파라미터
+- 하드 파싱은 cpu를 많이 소비하는 몇 안되는 작업 중 하나.
+- 그래서 라이브러리 캐시가 필요함.
+
+### 1.2.2 바인드 변수의 중요성
+#### 이름 없는 sql 문제
+- sql은 이름이 따로 없고 전체 sql 텍스트가 이름 역할을 함
+- 딕셔너리에 저장하지도 않음
+- 라이브러리 캐시에 적재함으로 써, 여러 사용자가 공유
+- 캐시 공간이 부족하면 버려졌다가 다음에 다시 실행할 때 똑같은 최적화 과정을 거쳐 캐시에 적재
+=> sql 자체가 이름이기 때문에 텍스트 중 작은 부분이라도 수정되면 그 순간 다른 객체가 탄생하는 구조
+#### 공유 가능 sql
+의미적으로는 같지만, 실행할 때 각각의 최적화를 진행하고 라이브러리 캐시에 별도 공간 사용
+```oraclesqlplus
+select * from emp where empno = 7900;
+SELECT * FROM EMP WHERE EMPNO = 7900;
+SELECT * FROM EMP WHERE EMPNO = 7900 ;
+SELECT * FROM EMP WHERE EMPNO = 7900    ;
+
+```
+```java
+"select * from customer where login_id = """+login_id+""";
+```
+- 이 sql은 모든 sql을 하드파싱하고 캐시에 적재하기 때문에 io 대비 cpu 사용량을 증가 시킴.
+
+##### 바인드 변수 사용
+```java
+import java.sql.PreparedStatement;
+
+String sql = "select * from customer where login_id = ?";
+PreparedStatement st = con.preparedStatement(sql);
+con.setString(1,login_id);
+
+```
+- 이 경우에 하드 파싱은 최초로 한 번만 일어나고, 재사용됨.
